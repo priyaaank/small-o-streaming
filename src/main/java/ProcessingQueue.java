@@ -1,50 +1,80 @@
-
-import lombok.extern.slf4j.Slf4j;
-
-import java.util.Deque;
-import java.util.List;
-import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
-@Slf4j
 public class ProcessingQueue {
 
-    private Deque<ProcessedPost> processedPostQueue;
-    private Long timeWindowInMillis;
+    public static final long CURRENT_TIME_WINDOW = 0L;
+    private final Long timeWindowMillis;
+    private final Map<PostType, ProcessedPostLinkedListNode> nodeMap = new HashMap<>() {
+        {
+            put(PostType.LINKEDIN, null);
+            put(PostType.FB, null);
+            put(PostType.TWEET, null);
+        }
+    };
 
-    public ProcessingQueue() {
-        this(new ConcurrentLinkedDeque<>(), 60000L);
+    public ProcessingQueue(Long timeWindowMillis) {
+        this.timeWindowMillis = timeWindowMillis;
     }
 
-    public ProcessingQueue(Deque<ProcessedPost> processedPosts, Long timeWindowInMillis) {
-        this.processedPostQueue = processedPosts;
-        this.timeWindowInMillis = timeWindowInMillis;
-    }
-
-    public ProcessedPost processPost(RawPost rawPost) {
-        Integer remainingQuota = this.remainingQuotaForPostType(rawPost.getType());
-        ProcessedPost processedPost = remainingQuota > 0 ? rawPost.annotate() : rawPost.skipAnnotation();
-        this.processedPostQueue.addFirst(processedPost);
+    public ProcessedPost process(RawPost post) {
+        PostType postType = post.getType();
+        Long totalRemainingQuota = postType.getRemainingQuota(nodeMap.get(postType), timeWindowMillis, postType);
+        ProcessedPost processedPost = (totalRemainingQuota > 0) ? post.annotate() : post.skipAnnotation();
+        nodeMap.put(postType, new ProcessedPostLinkedListNode(nodeMap.get(postType), processedPost));
         return processedPost;
     }
 
-    public Integer remainingQuotaForPostType(PostType withPostType) {
-        Long milliSecondsAgo = System.currentTimeMillis() - timeWindowInMillis;
-        List<ProcessedPost> filteredPosts = postsAnnotatedInLast(milliSecondsAgo, withPostType);
-        return calculateRemainingQuota(withPostType, filteredPosts);
-    }
+    class ProcessedPostLinkedListNode {
 
-    private int calculateRemainingQuota(PostType withPostType, List<ProcessedPost> filteredPosts) {
-        return filteredPosts.size() >= withPostType.getLimit() ? 0 : withPostType.getLimit() - filteredPosts.size();
-    }
+        private ProcessedPostLinkedListNode prevNode;
+        private ProcessedPost post;
 
-    private List<ProcessedPost> postsAnnotatedInLast(Long tenSecondsAgo, PostType withPostType) {
-        return processedPostQueue
-                .stream()
-                .filter(ele -> withPostType.equals(ele.getType()))
-                .filter(ProcessedPost::isAnnotated)
-                .filter(ele -> ele.annotatedAfter(tenSecondsAgo))
-                .collect(Collectors.toList());
-    }
+        public ProcessedPostLinkedListNode(ProcessedPostLinkedListNode prev, ProcessedPost post) {
+            this.prevNode = prev;
+            this.post = post;
+        }
 
+        public Long computeQuota(Long timeWindowMillis, Map<Long, Integer> quotaBuckets, PostType type, long currTimeMillis) {
+            if (this.post.isAnnotated()) adjustQuota(timeWindowMillis, quotaBuckets, type, currTimeMillis);
+            if (oldestPostProcessingRequest()) return overallPastPresentQuota(quotaBuckets, type);
+            return this.prevNode.computeQuota(timeWindowMillis, quotaBuckets, type, currTimeMillis);
+        }
+
+        private boolean oldestPostProcessingRequest() {
+            return prevNode == null;
+        }
+
+        private long overallPastPresentQuota(Map<Long, Integer> quotaBuckets, PostType type) {
+            Integer ongoingBurstQuota = quotaBuckets.getOrDefault(CURRENT_TIME_WINDOW, type.getLimit());
+            long spilloverQuota = calculateSpillOverQuotaUsage(quotaBuckets);
+            return (ongoingBurstQuota + applyCeilingToSpilloverQuota(type, spilloverQuota));
+        }
+
+        private long calculateSpillOverQuotaUsage(Map<Long, Integer> quotaBuckets) {
+            return quotaBuckets
+                    .keySet()
+                    .stream()
+                    .filter(key -> !Objects.equals(key, CURRENT_TIME_WINDOW)).
+                    map(quotaBuckets::get)
+                    .map(quotaUsage -> quotaUsage < 0 ? 0 : quotaUsage)
+                    .collect(Collectors.summarizingLong(Integer::intValue))
+                    .getSum();
+        }
+
+        private void adjustQuota(Long timeWindowMillis, Map<Long, Integer> quotaBuckets, PostType type, long currTimeMillis) {
+            Long bucket = calculateTimeWindowBucket(timeWindowMillis, currTimeMillis);
+            quotaBuckets.put(bucket, quotaBuckets.getOrDefault(bucket, type.getLimit()) - 1);
+        }
+
+        private long applyCeilingToSpilloverQuota(PostType type, long spilloverQuota) {
+            return spilloverQuota > type.getLimit() ? type.getLimit() : spilloverQuota;
+        }
+
+        private long calculateTimeWindowBucket(Long timeWindowMillis, long currTimeMillis) {
+            return (currTimeMillis - this.post.getAnnotatedTimestamp()) / timeWindowMillis;
+        }
+    }
 }

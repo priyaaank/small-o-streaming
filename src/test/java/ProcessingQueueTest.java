@@ -3,89 +3,80 @@ import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.IntStream;
-import java.util.stream.Stream;
 
-import static java.util.stream.Collectors.groupingBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ProcessingQueueTest {
 
-    public static final ArrayList<ProcessedPost> EMPTY_LIST = new ArrayList<>();
     private ProcessingQueue processingQueue;
-    private Random random;
+    private Integer index;
 
     @BeforeEach
     void setUp() {
-        random = new Random();
-        processingQueue = new ProcessingQueue(new ConcurrentLinkedDeque<>(), 100L);
+        index = 0;
+        this.processingQueue = new ProcessingQueue(100L);
     }
 
     @Test
-    public void shouldReturnAsCompleteQuoteAvailableByDefault() {
-        Integer remainingLinkedInPosts = this.processingQueue.remainingQuotaForPostType(PostType.LINKEDIN);
+    public void shouldProcessAllPostsWhenWithinQuota() {
+        List<ProcessedPost> processedPosts = processPosts(5, PostType.LINKEDIN);
 
-        assertEquals(remainingLinkedInPosts, 10);
+        assertEquals(5, processedPosts.stream().filter(ProcessedPost::isAnnotated).count());
     }
 
     @Test
-    public void shouldReturnTheQuotaValueWhenRemaining() {
-        this.processingQueue.processPost(new RawPost(PostType.LINKEDIN, "I had an epiphany!"));
-        Integer remainingLinkedInPosts = this.processingQueue.remainingQuotaForPostType(PostType.LINKEDIN);
+    public void shouldManageQuoteSeparatelyForDifferentPostType() {
+        List<ProcessedPost> processedPosts = processPosts(10, PostType.LINKEDIN);
+        processedPosts.addAll(processPosts(60, PostType.TWEET));
 
-        assertEquals(remainingLinkedInPosts, 9);
+        assertEquals(70, processedPosts.stream().filter(ProcessedPost::isAnnotated).count());
     }
 
     @Test
-    public void shouldReturnZeroWhenQuotaHasBeenExhausted() {
-        IntStream.range(0, 10).forEach(index -> this.processingQueue.processPost(new RawPost(PostType.LINKEDIN, "I had an epiphany!" + index)));
-        Integer remainingLinkedInPosts = this.processingQueue.remainingQuotaForPostType(PostType.LINKEDIN);
+    public void shouldAnnotatePostsWithinQuotaLimitsDuringBursts() {
+        List<ProcessedPost> processedPosts = processPosts(100, PostType.LINKEDIN);
 
-        assertEquals(remainingLinkedInPosts, 0);
+        assertEquals(10, processedPosts.stream().filter(ProcessedPost::isAnnotated).count());
     }
 
     @Test
-    public void shouldNotReturnANegativeQuota() {
-        IntStream.range(0, 100).forEach(index -> this.processingQueue.processPost(new RawPost(PostType.LINKEDIN, "I had an epiphany!" + index)));
-        Integer remainingLinkedInPosts = this.processingQueue.remainingQuotaForPostType(PostType.LINKEDIN);
+    void shouldResetQuotaWhenTimeWindowElapses() throws InterruptedException {
+        List<ProcessedPost> processedPostList = processPosts(100, PostType.LINKEDIN);
+        Thread.sleep(100);
+        processedPostList.addAll(processPosts(100, PostType.LINKEDIN));
 
-        assertEquals(remainingLinkedInPosts, 0);
+        assertEquals(20, processedPostList.stream().filter(ProcessedPost::isAnnotated).count());
     }
 
     @Test
-    void shouldResetLimitForRespectiveTypesAsTimeWindowShifts() {
-        List<ProcessedPost> processedPostList = processNewPosts(1000);
+    void shouldCarryOverQuoteDuringUnevenBurst() throws InterruptedException {
+        List<ProcessedPost> processedPostList = new ArrayList<>();
+        processedPostList.addAll(processPosts(100, PostType.LINKEDIN));
+        processedPostList.addAll(processPosts(100, PostType.TWEET));
+        processedPostList.addAll(processPosts(100, PostType.FB));
+        Thread.sleep(100);
 
-        postsThatWereAnnotated(processedPostList).forEach(post -> {
-            Map<PostType, List<ProcessedPost>> postTypeCounts = annotationCountWithinHundredMillis(processedPostList, post.getAnnotatedTimestamp());
-            assertTrue(postTypeCounts.getOrDefault(PostType.LINKEDIN, EMPTY_LIST).size() <= PostType.LINKEDIN.getLimit());
-            assertTrue(postTypeCounts.getOrDefault(PostType.FB, EMPTY_LIST).size() <= PostType.FB.getLimit());
-            assertTrue(postTypeCounts.getOrDefault(PostType.TWEET, EMPTY_LIST).size() <= PostType.TWEET.getLimit());
-        });
+        processedPostList.addAll(processPosts(1, PostType.LINKEDIN));
+        processedPostList.addAll(processPosts(1, PostType.TWEET));
+        processedPostList.addAll(processPosts(1, PostType.FB));
+        Thread.sleep(100);
+
+        processedPostList.addAll(processPosts(25, PostType.LINKEDIN));
+        processedPostList.addAll(processPosts(125, PostType.TWEET));
+        processedPostList.addAll(processPosts(65, PostType.FB));
+
+        assertEquals(300, processedPostList.stream().filter(ProcessedPost::isAnnotated).count());
     }
 
-    private List<ProcessedPost> processNewPosts(int postCount) {
-        final List<ProcessedPost> processedPostList = new ArrayList<>();
-        IntStream.range(0, postCount).forEach(index -> {
-            PostType type = PostType.values()[random.nextInt(3)];
-            processedPostList.add(this.processingQueue.processPost(new RawPost(type, "I had an epiphany!" + index)));
-        });
+    private List<ProcessedPost> processPosts(int count, PostType type) {
+        List<ProcessedPost> processedPostList = new ArrayList<>();
+        IntStream.range(0, count).forEach(idx -> processedPostList.add(this.processingQueue.process(dummyPost(type))));
         return processedPostList;
     }
 
-    private Map<PostType, List<ProcessedPost>> annotationCountWithinHundredMillis(List<ProcessedPost> processedPostList, Long startTime) {
-        return processedPostList
-                .stream()
-                .filter(ProcessedPost::isAnnotated)
-                .filter(e -> e.annotatedAfter(startTime - 1) && e.annotatedBefore(startTime + 101))
-                .collect(groupingBy(ProcessedPost::getType));
+    private RawPost dummyPost(PostType type) {
+        return new RawPost(type, "I had an epiphany!" + index++);
     }
 
-    private Stream<ProcessedPost> postsThatWereAnnotated(List<ProcessedPost> processedPostList) {
-        return processedPostList.stream().filter(ProcessedPost::isAnnotated);
-    }
 }
