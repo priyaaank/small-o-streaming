@@ -3,7 +3,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
-public class ProcessingQueue {
+public class BurstController {
 
     public static final long CURRENT_TIME_WINDOW = 0L;
     private final Long timeWindowMillis;
@@ -15,7 +15,7 @@ public class ProcessingQueue {
         }
     };
 
-    public ProcessingQueue(Long timeWindowMillis) {
+    public BurstController(Long timeWindowMillis) {
         this.timeWindowMillis = timeWindowMillis;
     }
 

@@ -7,15 +7,15 @@ import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-class ProcessingQueueTest {
+class BurstProcessorTest {
 
-    private ProcessingQueue processingQueue;
+    private BurstController processingQueue;
     private Integer index;
 
     @BeforeEach
     void setUp() {
         index = 0;
-        this.processingQueue = new ProcessingQueue(100L);
+        this.processingQueue = new BurstController(100L);
     }
 
     @Test
@@ -26,7 +26,7 @@ class ProcessingQueueTest {
     }
 
     @Test
-    public void shouldManageQuoteSeparatelyForDifferentPostType() {
+    public void shouldManageQuotaSeparatelyForDifferentPostType() {
         List<ProcessedPost> processedPosts = processPosts(10, PostType.LINKEDIN);
         processedPosts.addAll(processPosts(60, PostType.TWEET));
 
@@ -50,7 +50,7 @@ class ProcessingQueueTest {
     }
 
     @Test
-    void shouldCarryOverQuoteDuringUnevenBurst() throws InterruptedException {
+    void shouldCarryOverQuotaDuringUnevenBurst() throws InterruptedException {
         List<ProcessedPost> processedPostList = new ArrayList<>();
         processedPostList.addAll(processPosts(100, PostType.LINKEDIN));
         processedPostList.addAll(processPosts(100, PostType.TWEET));
