@@ -1,0 +1,5 @@
+# Some notes
+* Used a custom LinkedList and Recursion approch
+* Not the most readable among my 4 implementations, but I feel, a bit more concise compared to others. (considering java verbosity)
+* There is a bug, which is since burst calculation adjustment happens upon receiving. So if no messages are sent for a while, it does not calculate and account quota spillover until first message is recived. Can be handled by capturing system time. But would be interested to see how others handled it
+* Finally, there is an optimization I can do here. Use memoization to prevent going all the way back and instead store, last computation to retrieve past quote. But not willing to do that now. That implementation will be a key aspect to improve performance. Current implementation is susceptible to performance degradation as post count increases
